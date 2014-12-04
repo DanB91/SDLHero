@@ -5,8 +5,18 @@
 #include <sys/mman.h>
 #include <stdint.h>
 
+#if !defined(MAP_ANONYMOUS)
+    
+    #if defined(MAP_ANON)
+        #define MAP_ANONYMOUS MAP_ANON
+    #endif
+
+#endif
+
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
+
+#define SOUND_FREQ 48000
 
 typedef union {
     struct {
@@ -41,6 +51,8 @@ static void printGeneralErrorAndExit(char* message) {
     exit(1);
 
 }
+
+
 static inline uint64_t
 __rdtsc(void)
 {
@@ -95,7 +107,7 @@ static void resizeTexture(Texture* texture, int newWidth, int newHeight,
     if(!(texture->pixels = mmap(NULL,
             sizeOfBuffer,
             PROT_READ | PROT_WRITE,
-            MAP_ANON | MAP_PRIVATE,
+            MAP_ANONYMOUS | MAP_PRIVATE ,
             -1,
             0))) {
         printGeneralErrorAndExit("Cannot allocate memeory\n");
@@ -122,6 +134,36 @@ static void printSDLErrorAndExit(void) {
     exit(1);
 }
 
+static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
+    int16_t* currSample = (int16_t*)stream;
+    uint32_t tone = 256;
+    uint32_t period = SOUND_FREQ / tone;
+    uint32_t halfPeriod = period / 2;
+
+    for (size_t i = 0; i < (len / sizeof(*currSample)); i+=2) {
+        
+        int16_t halfSample = ((i / halfPeriod) % 2) ? 1 : -1;
+
+        currSample[i] = halfSample * 1000; //left channel 
+        currSample[i+1] = halfSample * 1000; //right channel
+    }
+
+
+}
+
+static void initAudio(void) {
+    SDL_AudioSpec desiredAudio = {};
+    desiredAudio.channels = 2;
+    desiredAudio.samples = 4096;
+    desiredAudio.freq = SOUND_FREQ;
+    desiredAudio.format = AUDIO_S16LSB;
+    desiredAudio.callback = SDLAudioCallBack;
+
+    if (SDL_OpenAudio(&desiredAudio, NULL) < 0) {
+        printSDLErrorAndExit();
+    }
+}
+
 static void initSDL(SDL_Window** window, SDL_Renderer** renderer) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         printSDLErrorAndExit();
@@ -142,14 +184,16 @@ static void initSDL(SDL_Window** window, SDL_Renderer** renderer) {
 
     resizeTexture(&gTexture, SCREEN_WIDTH, SCREEN_HEIGHT, *renderer);
 
-    SDL_OpenAudio(NULL, NULL);
+    initAudio();
+
 }
 
 static void cleanUp(void) {
+    SDL_CloseAudio();
     SDL_Quit();
 }
 
-static void render(SDL_Window* window, Texture texture) {
+static void updateWindow(SDL_Window* window, Texture texture) {
     SDL_Renderer* renderer = SDL_GetRenderer(window);
     SDL_RenderClear(renderer);
     
@@ -199,16 +243,19 @@ int main(void) {
     uint64_t countFreq = SDL_GetPerformanceFrequency();
     uint64_t startCount = SDL_GetPerformanceCounter();
     uint64_t startCycles = __rdtsc();
-    
+   
+    SDL_PauseAudio(0);
     while(running) {
         SDL_PollEvent(&e);
         processEvent(&e);
         renderWeirdGradient(&gTexture, xOffset, yOffset);
-        render(window, gTexture);
+        updateWindow(window, gTexture);
 
         xOffset++;
         yOffset += 2;
 
+
+        //benchmark stuff
         uint64_t endCount = SDL_GetPerformanceCounter();
         uint64_t endCycles = __rdtsc();
 

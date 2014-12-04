@@ -5,7 +5,7 @@ include_directories(./src /usr/local/include)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -g -std=c11")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -g -std=gnu99")
 #set(SDL_BUILDING_LIBRARY)
 find_package(SDL2)
 
