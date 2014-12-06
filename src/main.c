@@ -18,6 +18,7 @@
 
 #define SOUND_FREQ 48000
 
+#define pi32 3.14159265358979f
 typedef union {
     struct {
         uint8_t a;
@@ -136,18 +137,23 @@ static void printSDLErrorAndExit(void) {
 
 static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
     int16_t* currSample = (int16_t*)stream;
-    uint32_t tone = 256;
+    uint32_t tone = 250;
     uint32_t period = SOUND_FREQ / tone;
-    uint32_t halfPeriod = period / 2;
+    uint32_t volume = 100;  
+    static uint32_t runningIndex = 0;
 
     for (size_t i = 0; i < (len / sizeof(*currSample)); i+=2) {
-        
-        int16_t halfSample = ((i / halfPeriod) % 2) ? 1 : -1;
 
-        currSample[i] = halfSample * 1000; //left channel 
-        currSample[i+1] = halfSample * 1000; //right channel
+        real32_t t = 2 * pi32 *  runningIndex++ / period;
+        real32_t sineVal = sinf(t);
+
+        //printf("%f\t%f\n", t, sineVal);
+
+        int16_t halfSample = sineVal * volume;
+
+        currSample[i] = halfSample * volume; //left channel 
+        currSample[i+1] = halfSample * volume; //right channel
     }
-
 
 }
 
@@ -263,7 +269,8 @@ int main(void) {
         real64_t fpsCount =  ((1./secPerFrame));
         real64_t mcPerFrame = (real64_t)(endCycles-startCycles) / (1000 * 1000 );
 
-        printf("TPF: %.2fms FPS: %.2f MCPF: %.2f\n", secPerFrame*1000, fpsCount, mcPerFrame);
+        //printf("TPF: %.2fms FPS: %.2f MCPF: %.2f\n", secPerFrame*1000, fpsCount, mcPerFrame);
+
 
         startCount = endCount;
         startCycles = endCycles;
