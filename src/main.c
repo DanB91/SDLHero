@@ -18,6 +18,8 @@
 
 #define SOUND_FREQ 48000
 
+#define MAX_CONTROLLERS 4
+
 #define pi32 3.14159265358979f
 typedef union {
     struct {
@@ -39,6 +41,17 @@ typedef struct {
     uint32_t height;
 } Texture;
 
+typedef struct {
+    SDL_GameController* controllers[MAX_CONTROLLERS];
+} InputContext;
+
+typedef struct {
+    uint32_t tone;
+    uint32_t volume;
+    uint32_t runningIndex;
+
+} SoundBuffer;
+
 typedef float real32_t;
 typedef double real64_t;
 
@@ -47,7 +60,7 @@ static bool running = true;
 
 static Texture gTexture;
 
-static void printGeneralErrorAndExit(char* message) {
+static void printGeneralErrorAndExit(const char* message) {
     fprintf(stderr, "Fatal Error: %s\n", message);
     exit(1);
 
@@ -74,7 +87,7 @@ __rdtsc(void)
 	return (((uint64_t)edx << 32) | eax);
 }
 
-static void renderWeirdGradient(Texture* texture, int blueOffset, int greenOffset) {
+static void renderWeirdGradient(const Texture* texture, int blueOffset, int greenOffset) {
     Pixel *pixels = texture->pixels;
 
     for (uint32_t y = 0; y < texture->height; y++) {
@@ -137,41 +150,52 @@ static void printSDLErrorAndExit(void) {
 
 static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
     int16_t* currSample = (int16_t*)stream;
-    uint32_t tone = 250;
-    uint32_t period = SOUND_FREQ / tone;
-    uint32_t volume = 100;  
-    static uint32_t runningIndex = 0;
+    SoundBuffer* sb = (SoundBuffer*)userData;
+    uint32_t period = SOUND_FREQ / sb->tone;
 
     for (size_t i = 0; i < (len / sizeof(*currSample)); i+=2) {
 
-        real32_t t = 2 * pi32 *  runningIndex++ / period;
+        real32_t t = 2 * pi32 *  sb->runningIndex++ / period;
         real32_t sineVal = sinf(t);
 
         //printf("%f\t%f\n", t, sineVal);
 
-        int16_t halfSample = sineVal * volume;
+        int16_t halfSample = sineVal * sb->volume;
 
-        currSample[i] = halfSample * volume; //left channel 
-        currSample[i+1] = halfSample * volume; //right channel
+        currSample[i] = halfSample * sb->volume; //left channel 
+        currSample[i+1] = halfSample * sb->volume; //right channel
     }
 
 }
 
-static void initAudio(void) {
+static void initAudio(SoundBuffer* sb) {
     SDL_AudioSpec desiredAudio = {};
     desiredAudio.channels = 2;
     desiredAudio.samples = 4096;
     desiredAudio.freq = SOUND_FREQ;
     desiredAudio.format = AUDIO_S16LSB;
     desiredAudio.callback = SDLAudioCallBack;
+    desiredAudio.userdata = sb; 
+
+
 
     if (SDL_OpenAudio(&desiredAudio, NULL) < 0) {
         printSDLErrorAndExit();
     }
 }
 
-static void initSDL(SDL_Window** window, SDL_Renderer** renderer) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+static void initInput(InputContext* ic) {
+    for (int i = 0; i < MAX_CONTROLLERS; i++) {
+        if (SDL_IsGameController(i)) {
+            if(!(ic->controllers[i] = SDL_GameControllerOpen(i))){
+                printSDLErrorAndExit();
+            }
+        }
+    }
+}
+
+static void initSDL(SDL_Window** window, SDL_Renderer** renderer, InputContext* ic, SoundBuffer* sb) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         printSDLErrorAndExit();
     }
 
@@ -190,7 +214,8 @@ static void initSDL(SDL_Window** window, SDL_Renderer** renderer) {
 
     resizeTexture(&gTexture, SCREEN_WIDTH, SCREEN_HEIGHT, *renderer);
 
-    initAudio();
+    initAudio(sb);
+    initInput(ic);
 
 }
 
@@ -226,6 +251,7 @@ static void processWindowEvent(SDL_WindowEvent* we){
 }
 
 static void processEvent(SDL_Event* e) {
+    printf("%d\n", e->type);
     switch (e->type) {
         case SDL_QUIT:
             running = false;
@@ -241,11 +267,18 @@ int main(void) {
     SDL_Event e;
     SDL_Window *window;
     SDL_Renderer *renderer;
+    InputContext ic = {};
+    SoundBuffer sb = {};
 
-    uint32_t xOffset = 0;
-    uint32_t yOffset = 0;
+    sb.volume = 200;
+    sb.tone = 256;
 
-    initSDL(&window, &renderer);
+    int32_t xOffset = 0;
+    int32_t yOffset = 0;
+
+    initSDL(&window, &renderer, &ic, &sb);
+    
+    
     uint64_t countFreq = SDL_GetPerformanceFrequency();
     uint64_t startCount = SDL_GetPerformanceCounter();
     uint64_t startCycles = __rdtsc();
@@ -254,14 +287,25 @@ int main(void) {
     while(running) {
         SDL_PollEvent(&e);
         processEvent(&e);
+
+        //input
+        int16_t xVal = SDL_GameControllerGetAxis(ic.controllers[0], SDL_CONTROLLER_AXIS_LEFTX);
+        int16_t yVal = SDL_GameControllerGetAxis(ic.controllers[0], SDL_CONTROLLER_AXIS_LEFTY);
+
+        xOffset += xVal / 4096;
+        yOffset += yVal / 4096;
+
+        sb.tone = 512 + (int)(256.0f*((real32_t)yVal / 30000.0f));
+
+        //printf("%d\n", sb.tone);
+
+
         renderWeirdGradient(&gTexture, xOffset, yOffset);
         updateWindow(window, gTexture);
 
-        xOffset++;
-        yOffset += 2;
-
-
+     
         //benchmark stuff
+        /*
         uint64_t endCount = SDL_GetPerformanceCounter();
         uint64_t endCycles = __rdtsc();
 
@@ -269,12 +313,12 @@ int main(void) {
         real64_t fpsCount =  ((1./secPerFrame));
         real64_t mcPerFrame = (real64_t)(endCycles-startCycles) / (1000 * 1000 );
 
-        //printf("TPF: %.2fms FPS: %.2f MCPF: %.2f\n", secPerFrame*1000, fpsCount, mcPerFrame);
+        printf("TPF: %.2fms FPS: %.2f MCPF: %.2f\n", secPerFrame*1000, fpsCount, mcPerFrame);
 
 
         startCount = endCount;
         startCycles = endCycles;
-
+*/
     }
 
     cleanUp();
