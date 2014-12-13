@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <sys/mman.h>
 #include <stdint.h>
+#include <x86intrin.h>
+#include <assert.h>
+
+#include "handmade.hpp"
 
 #if !defined(MAP_ANONYMOUS)
     
@@ -13,52 +17,31 @@
 
 #endif
 
-#define SCREEN_WIDTH 640
-#define SCREEN_HEIGHT 480
 
-#define SOUND_FREQ 48000
+//TODO: get rid of this struct
+struct Texture {
+    Pixel* pixels = nullptr;
+    uint32_t sizeInBytes = 0; //size of pixels in bytes
+    SDL_Texture* sdlTexture = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
 
-#define MAX_CONTROLLERS 4
+struct InputContext {
+    SDL_GameController* controllers[MAX_CONTROLLERS] = {};
+};
 
-#define pi32 3.14159265358979f
-typedef union {
-    struct {
-        uint8_t a;
-        uint8_t b;
-        uint8_t g;
-        uint8_t r; 
-    };
-
-    uint32_t value;
-
-} Pixel;
-
-typedef struct {
-    Pixel* pixels;
-    uint32_t sizeInBytes; //size of pixels in bytes
-    SDL_Texture* sdlTexture;
-    uint32_t width;
-    uint32_t height;
-} Texture;
-
-typedef struct {
-    SDL_GameController* controllers[MAX_CONTROLLERS];
-} InputContext;
-
-typedef struct {
-    uint32_t tone;
-    uint32_t volume;
-    uint32_t runningIndex;
-
-} SoundBuffer;
-
-typedef float real32_t;
-typedef double real64_t;
-
+struct SDLSoundRingBuffer {
+    Sample samples[SOUND_FREQ * SOUND_LATENCY];
+    uint32_t sampleToPlay = 0;
+    uint32_t firstFreeSample = 0;
+    int32_t samplesNeeded = arraySize(samples);
+};
 
 static bool running = true;
 
 static Texture gTexture;
+static OffScreenBuffer gOsb;
 
 static void printGeneralErrorAndExit(const char* message) {
     fprintf(stderr, "Fatal Error: %s\n", message);
@@ -67,49 +50,9 @@ static void printGeneralErrorAndExit(const char* message) {
 }
 
 
-static inline uint64_t
-__rdtsc(void)
-{
-	uint32_t eax = 0, edx;
-
-	__asm__ __volatile__("cpuid;"
-			     "rdtsc;"
-				: "+a" (eax), "=d" (edx)
-				:
-				: "%rcx", "%rbx", "memory");
-
-	__asm__ __volatile__("xorl %%eax, %%eax;"
-			     "cpuid;"
-				:
-				:
-				: "%rax", "%rbx", "%rcx", "%rdx", "memory");
-
-	return (((uint64_t)edx << 32) | eax);
-}
-
-static void renderWeirdGradient(const Texture* texture, int blueOffset, int greenOffset) {
-    Pixel *pixels = texture->pixels;
-
-    for (uint32_t y = 0; y < texture->height; y++) {
-
-        Pixel *currPixel = pixels; 
-
-        for (uint32_t x = 0; x < texture->width; x++) {
-            currPixel->b = x + blueOffset;
-            currPixel->g = y + greenOffset;
-
-            currPixel++;
-        }
-
-        pixels += texture->width;
-    }
-
-}
-
-
 //TODO: This function can both init and resize a texture.  Rename
 //to something better.  Or, refactor
-static void resizeTexture(Texture* texture, int newWidth, int newHeight,
+static void resizeTexture(Texture* texture, OffScreenBuffer* osb, int newWidth, int newHeight,
         SDL_Renderer* renderer) {
     int sizeOfBuffer = newWidth * newHeight * sizeof(Pixel);
 
@@ -118,7 +61,7 @@ static void resizeTexture(Texture* texture, int newWidth, int newHeight,
 
     }
 
-    if(!(texture->pixels = mmap(NULL,
+    if(!(texture->pixels = (Pixel*)mmap(NULL,
             sizeOfBuffer,
             PROT_READ | PROT_WRITE,
             MAP_ANONYMOUS | MAP_PRIVATE ,
@@ -141,6 +84,11 @@ static void resizeTexture(Texture* texture, int newWidth, int newHeight,
 
     texture->width = newWidth;
     texture->height = newHeight;
+
+    //quick hack before i get rid of texture struct
+    osb->pixels = texture->pixels;
+    osb->height = texture->height;
+    osb->width = texture->width;
 }
 
 static void printSDLErrorAndExit(void) {
@@ -148,34 +96,77 @@ static void printSDLErrorAndExit(void) {
     exit(1);
 }
 
-static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
-    int16_t* currSample = (int16_t*)stream;
-    SoundBuffer* sb = (SoundBuffer*)userData;
-    uint32_t period = SOUND_FREQ / sb->tone;
+/*
+ *---------------------------------------------------------------
+ *              |                                |               |                
+ *              |                                |               |
+ *              |                                |               |                
+ *              |                                |               |                
+ * Region 2     |                                | Region 1      |
+ *              |                                |               |
+ *              |                                |               |
+ *              |                                |               |
+ *---------------------------------------------------------------
+ *          sampleToPlay                    firstFreeSample       numSamples
+ */
 
-    for (size_t i = 0; i < (len / sizeof(*currSample)); i+=2) {
+static void updateSDLSoundBuffer(SDLSoundRingBuffer* dest, SoundBuffer* src) {
 
-        real32_t t = 2 * pi32 *  sb->runningIndex++ / period;
-        real32_t sineVal = sinf(t);
-
-        //printf("%f\t%f\n", t, sineVal);
-
-        int16_t halfSample = sineVal * sb->volume;
-
-        currSample[i] = halfSample * sb->volume; //left channel 
-        currSample[i+1] = halfSample * sb->volume; //right channel
+    if (dest->samplesNeeded == 0) {
+        return;
     }
+
+    uint32_t destBufferLen = arraySize(dest->samples);
+    Sample* region1 = dest->samples + dest->firstFreeSample;
+    uint32_t region1Len = (dest->firstFreeSample < dest->sampleToPlay) ? dest->sampleToPlay : (destBufferLen - dest->firstFreeSample);
+    Sample* region2 = dest->samples;
+    uint32_t region2Len = (dest->firstFreeSample < dest->sampleToPlay) ? 0 : dest->sampleToPlay;
+
+    memcpy(region1, src->samples, region1Len * sizeof(Sample));  
+    memcpy(region2, src->samples + region1Len, region2Len * sizeof(Sample));
+
+    dest->firstFreeSample = (dest->firstFreeSample +region1Len + region2Len) % destBufferLen;
+
+    src->numSamples -= region1Len + region2Len;
+    dest->samplesNeeded -= region1Len + region2Len;
+
+    if (src->numSamples < 0) src->numSamples = 0;
+    if (dest->samplesNeeded < 0) dest->samplesNeeded = 0;
+}
+
+static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
+    
+    SDLSoundRingBuffer* buf = (SDLSoundRingBuffer*)userData;
+    uint32_t samplesRequested = len / sizeof(Sample);
+    uint32_t ringBufferLen = arraySize(buf->samples);
+
+    assert(len % sizeof(Sample) == 0);
+
+    uint32_t region1Len = samplesRequested; 
+    uint32_t region2Len = 0; 
+    if (ringBufferLen - buf->sampleToPlay < samplesRequested) {
+        region1Len = ringBufferLen - buf->sampleToPlay;
+        region2Len = samplesRequested - region1Len;
+    }
+
+    assert((region1Len + region2Len) * sizeof(Sample) == len);
+
+    memcpy(stream, buf->samples + buf->sampleToPlay, region1Len * sizeof(Sample));
+    memcpy(stream + region1Len, buf->samples, region2Len * sizeof(Sample));
+
+    buf->sampleToPlay += (region1Len + region2Len) % arraySize(buf->samples);
+    buf->samplesNeeded += len / sizeof(Sample);
 
 }
 
-static void initAudio(SoundBuffer* sb) {
-    SDL_AudioSpec desiredAudio = {};
-    desiredAudio.channels = 2;
+static void initAudio(SDLSoundRingBuffer* srb) {
+    SDL_AudioSpec desiredAudio;
+    desiredAudio.channels = NUM_CHANNELS;
     desiredAudio.samples = 4096;
     desiredAudio.freq = SOUND_FREQ;
     desiredAudio.format = AUDIO_S16LSB;
     desiredAudio.callback = SDLAudioCallBack;
-    desiredAudio.userdata = sb; 
+    desiredAudio.userdata = srb; 
 
 
 
@@ -194,7 +185,7 @@ static void initInput(InputContext* ic) {
     }
 }
 
-static void initSDL(SDL_Window** window, SDL_Renderer** renderer, InputContext* ic, SoundBuffer* sb) {
+static void initSDL(SDL_Window** window, SDL_Renderer** renderer, OffScreenBuffer* osb, InputContext* ic, SDLSoundRingBuffer* srb) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         printSDLErrorAndExit();
     }
@@ -212,9 +203,9 @@ static void initSDL(SDL_Window** window, SDL_Renderer** renderer, InputContext* 
         printSDLErrorAndExit();
     }
 
-    resizeTexture(&gTexture, SCREEN_WIDTH, SCREEN_HEIGHT, *renderer);
+    resizeTexture(&gTexture, osb, SCREEN_WIDTH, SCREEN_HEIGHT, *renderer);
 
-    initAudio(sb);
+    initAudio(srb);
     initInput(ic);
 
 }
@@ -244,14 +235,13 @@ static void processWindowEvent(SDL_WindowEvent* we){
     switch (we->event) {
         case SDL_WINDOWEVENT_RESIZED:
             printf("SDL_WINDOWEVENT_RESIZED (%d, %d)\n", we->data1, we->data2);
-           // resizeTexture(&gTexture, we->data1, we->data2,
-           //         SDL_GetRenderer(SDL_GetWindowFromID(we->windowID)));
+           resizeTexture(&gTexture, &gOsb, we->data1, we->data2,
+                    SDL_GetRenderer(SDL_GetWindowFromID(we->windowID)));
             break;
     }
 }
 
 static void processEvent(SDL_Event* e) {
-    printf("%d\n", e->type);
     switch (e->type) {
         case SDL_QUIT:
             running = false;
@@ -267,22 +257,23 @@ int main(void) {
     SDL_Event e;
     SDL_Window *window;
     SDL_Renderer *renderer;
-    InputContext ic = {};
-    SoundBuffer sb = {};
+    InputContext ic;
+    SDLSoundRingBuffer srb;
+    SoundBuffer sb;
 
-    sb.volume = 200;
+    sb.volume = 100;
     sb.tone = 256;
 
     int32_t xOffset = 0;
     int32_t yOffset = 0;
 
-    initSDL(&window, &renderer, &ic, &sb);
+    initSDL(&window, &renderer, &gOsb, &ic, &srb);
     
     
     uint64_t countFreq = SDL_GetPerformanceFrequency();
     uint64_t startCount = SDL_GetPerformanceCounter();
-    uint64_t startCycles = __rdtsc();
-   
+    uint64_t startCycles = _rdtsc();
+
     SDL_PauseAudio(0);
     while(running) {
         SDL_PollEvent(&e);
@@ -298,9 +289,14 @@ int main(void) {
         sb.tone = 512 + (int)(256.0f*((real32_t)yVal / 30000.0f));
 
         //printf("%d\n", sb.tone);
+       
+        sb.numSamples += srb.samplesNeeded;
 
+        SDL_LockAudioDevice(1);
+        gameUpdateAndRender(&gOsb, xOffset, yOffset, &sb);
+        updateSDLSoundBuffer(&srb, &sb);
+        SDL_UnlockAudioDevice(1);
 
-        renderWeirdGradient(&gTexture, xOffset, yOffset);
         updateWindow(window, gTexture);
 
      
