@@ -96,68 +96,6 @@ static void printSDLErrorAndExit(void) {
     exit(1);
 }
 
-/*
- *---------------------------------------------------------------
- *              |                                |               |                
- *              |                                |               |
- *              |                                |               |                
- *              |                                |               |                
- * Region 2     |                                | Region 1      |
- *              |                                |               |
- *              |                                |               |
- *              |                                |               |
- *---------------------------------------------------------------
- *          sampleToPlay                    firstFreeSample       numSamples
- */
-
-static void updateSDLSoundBuffer(SDLSoundRingBuffer* dest, SoundBuffer* src) {
-
-    if (dest->samplesNeeded == 0) {
-        return;
-    }
-
-    uint32_t destBufferLen = arraySize(dest->samples);
-    Sample* region1 = dest->samples + dest->firstFreeSample;
-    uint32_t region1Len = (dest->firstFreeSample < dest->sampleToPlay) ? dest->sampleToPlay : (destBufferLen - dest->firstFreeSample);
-    Sample* region2 = dest->samples;
-    uint32_t region2Len = (dest->firstFreeSample < dest->sampleToPlay) ? 0 : dest->sampleToPlay;
-
-    memcpy(region1, src->samples, region1Len * sizeof(Sample));  
-    memcpy(region2, src->samples + region1Len, region2Len * sizeof(Sample));
-
-    dest->firstFreeSample = (dest->firstFreeSample +region1Len + region2Len) % destBufferLen;
-
-    src->numSamples -= region1Len + region2Len;
-    dest->samplesNeeded -= region1Len + region2Len;
-
-    if (src->numSamples < 0) src->numSamples = 0;
-    if (dest->samplesNeeded < 0) dest->samplesNeeded = 0;
-}
-
-static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
-    
-    SDLSoundRingBuffer* buf = (SDLSoundRingBuffer*)userData;
-    uint32_t samplesRequested = len / sizeof(Sample);
-    uint32_t ringBufferLen = arraySize(buf->samples);
-
-    assert(len % sizeof(Sample) == 0);
-
-    uint32_t region1Len = samplesRequested; 
-    uint32_t region2Len = 0; 
-    if (ringBufferLen - buf->sampleToPlay < samplesRequested) {
-        region1Len = ringBufferLen - buf->sampleToPlay;
-        region2Len = samplesRequested - region1Len;
-    }
-
-    assert((region1Len + region2Len) * sizeof(Sample) == len);
-
-    memcpy(stream, buf->samples + buf->sampleToPlay, region1Len * sizeof(Sample));
-    memcpy(stream + region1Len, buf->samples, region2Len * sizeof(Sample));
-
-    buf->sampleToPlay += (region1Len + region2Len) % arraySize(buf->samples);
-    buf->samplesNeeded += len / sizeof(Sample);
-
-}
 
 static void initAudio(SDLSoundRingBuffer* srb) {
     SDL_AudioSpec desiredAudio;
@@ -165,7 +103,7 @@ static void initAudio(SDLSoundRingBuffer* srb) {
     desiredAudio.samples = 4096;
     desiredAudio.freq = SOUND_FREQ;
     desiredAudio.format = AUDIO_S16LSB;
-    desiredAudio.callback = SDLAudioCallBack;
+    desiredAudio.callback = nullptr;
     desiredAudio.userdata = srb; 
 
 
