@@ -21,7 +21,10 @@ static void renderWeirdGradient(OffScreenBuffer *buf, int blueOffset, int greenO
 
 
 static void outputSound(SoundBuffer* sb) {
+
     real32_t period = SOUND_FREQ / sb->tone;
+
+
 
     for (uint32_t i = 0; i < sb->numSamples; i++) {
 
@@ -30,9 +33,11 @@ static void outputSound(SoundBuffer* sb) {
 
         int16_t sample = sineVal * sb->volume;
 
-        sb->samples[i].leftChannel = sample * sb->volume; //left channel 
-        sb->samples[i].rightChannel = sample * sb->volume; //right channel
+        sb->samples[i].leftChannel = sample;  //left channel 
+        sb->samples[i].rightChannel = sample; //right channel
+
     }
+
 }
 
 void gameUpdateAndRender(OffScreenBuffer *buf, int blueOffset, int greenOffset, SoundBuffer* sb) {

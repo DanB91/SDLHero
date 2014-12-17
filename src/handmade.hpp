@@ -1,18 +1,18 @@
 #include <stdint.h>
+#include <stdio.h>
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
 
 #define SOUND_FREQ 48000
 #define NUM_CHANNELS 2
-#define SOUND_LATENCY 1/15 //in seconds
-#define BYTES_PER_SAMPLE sizeof(int16_t) * NUM_CHANNELS
+#define SOUND_LATENCY (SOUND_FREQ / 15)
 
 #define MAX_CONTROLLERS 4
 
 #define pi32 3.14159265358979f
 
-#define arraySize(array) sizeof(array) / sizeof((array)[0])
+#define arraySize(array) (sizeof(array) / sizeof((array)[0]))
 
 typedef float real32_t;
 typedef double real64_t;
@@ -39,8 +39,8 @@ struct SoundBuffer {
     uint32_t tone = 0;
     uint32_t volume = 0;
     real32_t t = 0; //used for argument in sine
-    Sample samples[SOUND_FREQ * SOUND_LATENCY];
-    int32_t numSamples = 0;
+    Sample samples[SOUND_FREQ];
+    uint32_t numSamples = 0;
 };
 
 struct OffScreenBuffer{

@@ -4,3 +4,4 @@ build
 .ycm_extra_conf.pyc
 .idea
 HandmadeHero
+*.o

@@ -1,13 +1,16 @@
 CC:=clang++
-CFLAGS:=-std=c++11  $(shell sdl2-config --cflags)
+CFLAGS:=-std=c++11 -g -Wall $(shell sdl2-config --cflags)
 LIB:=-std=c++11 $(shell sdl2-config --libs)
-DEPS:=src/handmade.h
-OBJ:=src/sdl_main.o src/handmade.o 
+DEPS:=$(wildcard src/*.hpp)
+SRC:=$(wildcard src/*.cpp)
+OBJ:=$(patsubst src/%.cpp,%.o,$(SRC))
+
 
 all: HandmadeHero
 
-.cpp.o: $(DEPS)
+%.o: src/%.cpp $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $< 
+
 HandmadeHero: $(OBJ)
 	$(CC) $(LIB) -o $@ $^ 
 
