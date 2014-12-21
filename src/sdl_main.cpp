@@ -109,7 +109,7 @@ static void printSDLErrorAndExit(void) {
  *           end                               start       numSamples
  */
 
-static void updateSDLSoundBuffer(SDLSoundRingBuffer* dest, const SoundBuffer* src, uint32_t start, uint32_t end) {
+static void updateSDLSoundBuffer(SDLSoundRingBuffer* dest, const GameSoundOutput* src, uint32_t start, uint32_t end) {
 
     Sample* region1 = dest->samples + start;
     uint32_t region1Len = (start <= end) ? end - start : arraySize(dest->samples) - start ;
@@ -149,10 +149,12 @@ static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
     memcpy(stream, buf->samples + buf->sampleToPlay, region1Len * sizeof(Sample));
     memcpy(stream + (region1Len * sizeof(Sample)), buf->samples, region2Len * sizeof(Sample));
 
+#ifndef NDEBUG
     //TODO: Take out eventually
     for(size_t i = 0; i < len / sizeof(Sample); i++){
         assert(((Sample*)stream)[i].rightChannel == buf->samples[(i + buf->sampleToPlay) % ringBufferLen].rightChannel);
     }
+#endif
 
     buf->sampleToPlay = (buf->sampleToPlay + region1Len + region2Len) % ringBufferLen;
 }
@@ -229,6 +231,7 @@ static void updateWindow(SDL_Window* window, Texture texture) {
     SDL_RenderPresent(renderer);
 }
 
+
 static void processWindowEvent(SDL_WindowEvent* we){
     switch (we->event) {
         case SDL_WINDOWEVENT_RESIZED:
@@ -239,7 +242,11 @@ static void processWindowEvent(SDL_WindowEvent* we){
     }
 }
 
+
 static void processEvent(SDL_Event* e) {
+    ControllerInput controllerInputStates;
+    
+    printf("half: %d\n", controllerInputStates.directionRight.halfTransitionCount);
     switch (e->type) {
         case SDL_QUIT:
             running = false;
@@ -250,6 +257,39 @@ static void processEvent(SDL_Event* e) {
     }
 }
 
+static void processControllerButtonInput(ButtonState* newState, const ButtonState* oldState, bool* isAnalog, SDL_GameController* controller, SDL_GameControllerButton sdlButton) {
+    newState->isEndedDown = SDL_GameControllerGetButton(controller, sdlButton);
+    if(newState->isEndedDown == oldState->isEndedDown) {
+        newState->halfTransitionCount +=  1;
+
+        switch(sdlButton) {
+            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                *isAnalog = true;
+            default:
+                ;
+        }
+    }
+
+
+
+}
+
+static real32_t normalizeStickInput(int16_t stickInput) {
+    real32_t value = 0.f;
+
+    if(stickInput > 0) {
+        value = stickInput / 32767.0;
+    }
+    else {
+        value = stickInput / 32768.0;
+    }
+
+    return value;
+}
+
 
 int main(void) {
 
@@ -258,13 +298,14 @@ int main(void) {
     SDL_Renderer *renderer;
     InputContext ic;
     SDLSoundRingBuffer srb;
-    SoundBuffer sb;
+    GameSoundOutput sb;
 
-    sb.volume = 5000;
-    sb.tone = 256;
+    ControllerInput controllerInputStates[2]; //contains old and new state
+    ControllerInput* newCIState = &controllerInputStates[0];
+    ControllerInput* oldCIState = &controllerInputStates[1];
 
-    int32_t xOffset = 0;
-    int32_t yOffset = 0;
+
+    sb.volume = 2500;
 
     initSDL(&window, &renderer, &gOsb, &ic, &srb);
     
@@ -278,33 +319,57 @@ int main(void) {
         SDL_PollEvent(&e);
         processEvent(&e);
 
+
         //input
-        int16_t xVal = SDL_GameControllerGetAxis(ic.controllers[0], SDL_CONTROLLER_AXIS_LEFTX);
-        int16_t yVal = SDL_GameControllerGetAxis(ic.controllers[0], SDL_CONTROLLER_AXIS_LEFTY);
+        for(int i = 0; i < MAX_CONTROLLERS; i++) {
+            if(ic.controllers[i] != nullptr && SDL_GameControllerGetAttached(ic.controllers[i])) {
 
-        xOffset += xVal / 4096;
-        yOffset += yVal / 4096;
+                int16_t xVal = SDL_GameControllerGetAxis(ic.controllers[i], SDL_CONTROLLER_AXIS_LEFTX);
+                int16_t yVal = SDL_GameControllerGetAxis(ic.controllers[i], SDL_CONTROLLER_AXIS_LEFTY);
 
-        sb.tone = 512 + (int)(256.0f*((real32_t)yVal / 30000.0f));
+                newCIState->avgX = normalizeStickInput(xVal);
+                newCIState->avgY = normalizeStickInput(yVal);
+
+                if(newCIState->avgX != 0 || newCIState != 0) {
+                    newCIState->isAnalog = true;
+                }
+
+                processControllerButtonInput(&newCIState->actionDown, &oldCIState->actionDown, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_A);
+                processControllerButtonInput(&newCIState->actionUp, &oldCIState->actionUp, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_Y);
+                processControllerButtonInput(&newCIState->actionLeft, &oldCIState->actionLeft, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_X);
+                processControllerButtonInput(&newCIState->actionRight, &oldCIState->actionRight, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_B);
+
+                processControllerButtonInput(&newCIState->directionDown, &oldCIState->directionDown, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+                processControllerButtonInput(&newCIState->directionUp, &oldCIState->directionUp, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_UP);
+                processControllerButtonInput(&newCIState->directionLeft, &oldCIState->directionLeft, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+                processControllerButtonInput(&newCIState->directionRight, &oldCIState->directionRight, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
 
 
+            }
+            else {
+                //TODO: Logging
+            }
+        }
 
+
+        //calculate audio buffers' indicies and sizes
         SDL_LockAudioDevice(1);
         uint32_t startIndex = srb.runningIndex % arraySize(srb.samples);
         uint32_t endIndex = (srb.sampleToPlay + SOUND_LATENCY) % arraySize(srb.samples);
-
-
         uint32_t samplesToGetFromGame = (startIndex <= endIndex) ? endIndex - startIndex : (arraySize(srb.samples) - startIndex) + endIndex; 
         sb.numSamples = samplesToGetFromGame;
-        
         SDL_UnlockAudioDevice(1);
 
-        //printf("start: %d end: %d samples to get from game: %d\n",startIndex, endIndex, samplesToGetFromGame);
-        gameUpdateAndRender(&gOsb, xOffset, yOffset, &sb);
+
+
+        gameUpdateAndRender(&gOsb, &sb, newCIState);
 
         updateSDLSoundBuffer(&srb, &sb, startIndex, endIndex);
         updateWindow(window, gTexture);
 
+        ControllerInput* temp = newCIState;
+        newCIState = oldCIState;
+        oldCIState = temp;
      
         //benchmark stuff
         /*

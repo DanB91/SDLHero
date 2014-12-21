@@ -20,9 +20,9 @@ static void renderWeirdGradient(OffScreenBuffer *buf, int blueOffset, int greenO
 }
 
 
-static void outputSound(SoundBuffer* sb) {
+static void outputSound(GameSoundOutput* sb, uint32_t tone) {
 
-    real32_t period = SOUND_FREQ / sb->tone;
+    real32_t period = SOUND_FREQ / tone;
 
 
 
@@ -40,7 +40,15 @@ static void outputSound(SoundBuffer* sb) {
 
 }
 
-void gameUpdateAndRender(OffScreenBuffer *buf, int blueOffset, int greenOffset, SoundBuffer* sb) {
-    outputSound(sb);
+void gameUpdateAndRender(OffScreenBuffer *buf, GameSoundOutput* sb, const ControllerInput* ci) {
+    static int blueOffset = 0;
+    static int greenOffset = 0;
+    static uint32_t tone = 0;
+    
+    tone = 512 + (int)(256.0f*ci->avgY);
+    blueOffset += ci->avgX * 4;
+    greenOffset += ci->avgY * 4 ;
+
+    outputSound(sb, tone);
     renderWeirdGradient(buf, blueOffset, greenOffset);
 }
