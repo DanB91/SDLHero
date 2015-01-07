@@ -1,47 +1,41 @@
-#include <SDL2/SDL.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <stdint.h>
-#include <x86intrin.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "handmade.hpp"
+#include "sdl_main.hpp"
 
-#if !defined(MAP_ANONYMOUS)
-    
-    #if defined(MAP_ANON)
-        #define MAP_ANONYMOUS MAP_ANON
-    #endif
-
-#endif
-
-
-//TODO: get rid of this struct
-struct Texture {
-    Pixel* pixels = nullptr;
-    uint32_t sizeInBytes = 0; //size of pixels in bytes
-    SDL_Texture* sdlTexture = nullptr;
-    uint32_t width = 0;
-    uint32_t height = 0;
-};
-
-struct InputContext {
-    SDL_GameController* controllers[MAX_CONTROLLERS] = {};
-};
-
-struct SDLSoundRingBuffer {
-    uint32_t sampleToPlay = 0;
-    uint32_t runningIndex = 0;
-    Sample samples[SOUND_FREQ];
-};
 
 static bool running = true;
 
 static Texture gTexture;
 static OffScreenBuffer gOsb;
 
+static inline uint64_t
+_rdtsc(void)
+{
+	uint32_t eax = 0, edx;
+
+	__asm__ __volatile__("cpuid;"
+			     "rdtsc;"
+				: "+a" (eax), "=d" (edx)
+				:
+				: "%rcx", "%rbx", "memory");
+
+	__asm__ __volatile__("xorl %%eax, %%eax;"
+			     "cpuid;"
+				:
+				:
+				: "%rax", "%rbx", "%rcx", "%rdx", "memory");
+
+	return (((uint64_t)edx << 32) | eax);
+}
 static void printGeneralErrorAndExit(const char* message) {
     fprintf(stderr, "Fatal Error: %s\n", message);
     exit(1);
@@ -112,7 +106,7 @@ static void printSDLErrorAndExit(void) {
 static void updateSDLSoundBuffer(SDLSoundRingBuffer* dest, const GameSoundOutput* src, uint32_t start, uint32_t end) {
 
     Sample* region1 = dest->samples + start;
-    uint32_t region1Len = (start <= end) ? end - start : arraySize(dest->samples) - start ;
+    uint32_t region1Len = (start <= end) ? end - start : ARRAY_SIZE(dest->samples) - start ;
     Sample* region2 = dest->samples;
     uint32_t region2Len = (start <= end) ? 0 : end;
 
@@ -132,7 +126,7 @@ static void SDLAudioCallBack(void* userData, uint8_t* stream, int len) {
     static Sample firstSample = {};
     firstSample = *buf->samples;
     uint32_t samplesRequested = len / sizeof(Sample);
-    uint32_t ringBufferLen = arraySize(buf->samples);
+    uint32_t ringBufferLen = ARRAY_SIZE(buf->samples);
 
     assert(len % sizeof(Sample) == 0);
 
@@ -175,17 +169,17 @@ static void initAudio(SDLSoundRingBuffer* srb) {
     }
 }
 
-static void initInput(InputContext* ic) {
-    for (int i = 0; i < MAX_CONTROLLERS; i++) {
+static void initInput(SDLInputContext* sdlIC) {
+    for (int i = 0; i < MAX_SDL_CONTROLLERS; i++) {
         if (SDL_IsGameController(i)) {
-            if(!(ic->controllers[i] = SDL_GameControllerOpen(i))){
+            if(!(sdlIC->controllers[i] = SDL_GameControllerOpen(i))){
                 printSDLErrorAndExit();
             }
         }
     }
 }
 
-static void initSDL(SDL_Window** window, SDL_Renderer** renderer, OffScreenBuffer* osb, InputContext* ic, SDLSoundRingBuffer* srb) {
+static void initSDL(SDL_Window** window, SDL_Renderer** renderer, OffScreenBuffer* osb, SDLInputContext* sdlIC, SDLSoundRingBuffer* srb) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         printSDLErrorAndExit();
     }
@@ -206,7 +200,7 @@ static void initSDL(SDL_Window** window, SDL_Renderer** renderer, OffScreenBuffe
     resizeTexture(&gTexture, osb, SCREEN_WIDTH, SCREEN_HEIGHT, *renderer);
 
     initAudio(srb);
-    initInput(ic);
+    initInput(sdlIC);
 
 }
 
@@ -242,11 +236,15 @@ static void processWindowEvent(SDL_WindowEvent* we){
     }
 }
 
+static void processKeyPress(ButtonState* buttonThatKeyCorrespondsTo, bool isDown) {
+    buttonThatKeyCorrespondsTo->isEndedDown = isDown;
+    buttonThatKeyCorrespondsTo->halfTransitionCount += (isDown) ? 1 : 0; 
+}
 
-static void processEvent(SDL_Event* e) {
+
+static void processEvent(SDL_Event* e, ControllerInput* keyboardController) {
     ControllerInput controllerInputStates;
     
-    printf("half: %d\n", controllerInputStates.directionRight.halfTransitionCount);
     switch (e->type) {
         case SDL_QUIT:
             running = false;
@@ -254,95 +252,169 @@ static void processEvent(SDL_Event* e) {
         case SDL_WINDOWEVENT:
             processWindowEvent(&e->window);
             break;
+
+        case SDL_KEYDOWN:
+        case SDL_KEYUP:
+            bool isDown = e->key.state == SDL_PRESSED;
+            isDown = e->key.state != SDL_RELEASED;
+            if(e->key.repeat == 0) {
+                switch(e->key.keysym.sym) {
+                    case SDLK_w:
+                        processKeyPress(&keyboardController->directionUp, isDown);
+                        break;
+                    case SDLK_s:
+                        processKeyPress(&keyboardController->directionDown, isDown);
+                        break;
+                    case SDLK_a:
+                        processKeyPress(&keyboardController->directionLeft, isDown);
+                        break;
+                    case SDLK_d:
+                        processKeyPress(&keyboardController->directionRight, isDown);
+                        break;
+                }
+            }
+            break;
     }
+
 }
 
 static void processControllerButtonInput(ButtonState* newState, const ButtonState* oldState, bool* isAnalog, SDL_GameController* controller, SDL_GameControllerButton sdlButton) {
     newState->isEndedDown = SDL_GameControllerGetButton(controller, sdlButton);
-    if(newState->isEndedDown == oldState->isEndedDown) {
-        newState->halfTransitionCount +=  1;
+    if(newState->isEndedDown) {
 
         switch(sdlButton) {
             case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
             case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
             case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
             case SDL_CONTROLLER_BUTTON_DPAD_UP:
-                *isAnalog = true;
+                *isAnalog = false;
+                break;
             default:
-                ;
+                break;
         }
+    }
+
+    if(newState->isEndedDown != oldState->isEndedDown) {
+        newState->halfTransitionCount +=  1;
     }
 
 
 
 }
 
-static real32_t normalizeStickInput(int16_t stickInput) {
+static void processControllerStickInput(ButtonState* newState, const ButtonState* oldState, bool* isAnalog, SDL_GameController* controller, SDL_GameControllerAxis sdlButton) {
+
+
+
+}
+
+static real32_t normalizeStickInput(int16_t stickInput, uint16_t deadZone) {
     real32_t value = 0.f;
 
-    if(stickInput > 0) {
+    if(stickInput > deadZone) {
         value = stickInput / 32767.0;
     }
-    else {
+    else if(stickInput < -deadZone){
         value = stickInput / 32768.0;
     }
 
     return value;
 }
 
+static ControllerInput* getContoller(InputContext* sdlIC, int index) {
+    assert(index < ARRAY_SIZE(sdlIC->controllers));
+
+    return &sdlIC->controllers[index];
+}
 
 int main(void) {
 
     SDL_Event e;
     SDL_Window *window;
     SDL_Renderer *renderer;
-    InputContext ic;
+    SDLInputContext sdlIC;
     SDLSoundRingBuffer srb;
     GameSoundOutput sb;
+    GameMemory memory;
 
-    ControllerInput controllerInputStates[2]; //contains old and new state
-    ControllerInput* newCIState = &controllerInputStates[0];
-    ControllerInput* oldCIState = &controllerInputStates[1];
+    //controller input state
+    InputContext inputStates[2]; //contains old and new state
+    InputContext* newInputState = &inputStates[0];
+    InputContext* oldInputState = &inputStates[1];
 
 
     sb.volume = 2500;
 
-    initSDL(&window, &renderer, &gOsb, &ic, &srb);
-    
+    memory.permanentStorageSize = MB(64);
+    memory.transientStorageSize = GB(1);
+    memory.transientStorage = mmap(nullptr, memory.transientStorageSize + memory.permanentStorageSize, PROT_READ | PROT_WRITE,
+            MAP_ANONYMOUS | MAP_PRIVATE ,
+            -1,
+            0);
+    memory.permanentStorage = (uint8_t*)(memory.transientStorage) + memory.transientStorageSize;
+
+
+    initSDL(&window, &renderer, &gOsb, &sdlIC, &srb);
+   
     
     uint64_t countFreq = SDL_GetPerformanceFrequency();
     uint64_t startCount = SDL_GetPerformanceCounter();
     uint64_t startCycles = _rdtsc();
 
+    debugFileWrite("test.out", (void*)"HELLO!!!", strlen("HELLO!!!") + 1);
+    FileContents file = debugFileRead("test.out");
+
+    printf("%s\n", file.contents);
+    
+    debugFreeFileContents(&file);
+
     SDL_PauseAudio(0);
     while(running) {
-        SDL_PollEvent(&e);
-        processEvent(&e);
+
+        //keyboard input
+        ControllerInput* newKeyInput = getContoller(newInputState, 0);
+        
+        ControllerInput* oldKeyInput = getContoller(oldInputState, 0);
+        *newKeyInput = {};
+
+        for(size_t i = 0; i < ARRAY_SIZE(oldKeyInput->buttons); i++) {
+            newKeyInput->buttons[i] = oldKeyInput->buttons[i];
+        }
+
+        while(SDL_PollEvent(&e)) {
+            processEvent(&e, newKeyInput);
+        }
 
 
-        //input
-        for(int i = 0; i < MAX_CONTROLLERS; i++) {
-            if(ic.controllers[i] != nullptr && SDL_GameControllerGetAttached(ic.controllers[i])) {
+        //controller input
+        for(int i = 0; i < MAX_SDL_CONTROLLERS; i++) {
+            if(sdlIC.controllers[i] != nullptr && SDL_GameControllerGetAttached(sdlIC.controllers[i])) {
 
-                int16_t xVal = SDL_GameControllerGetAxis(ic.controllers[i], SDL_CONTROLLER_AXIS_LEFTX);
-                int16_t yVal = SDL_GameControllerGetAxis(ic.controllers[i], SDL_CONTROLLER_AXIS_LEFTY);
+                ControllerInput* newCIState = getContoller(newInputState, i+1);
+                ControllerInput* oldCIState = getContoller(oldInputState, i+1);
+                
 
-                newCIState->avgX = normalizeStickInput(xVal);
-                newCIState->avgY = normalizeStickInput(yVal);
+                int16_t xVal = SDL_GameControllerGetAxis(sdlIC.controllers[i], SDL_CONTROLLER_AXIS_LEFTX);
+                int16_t yVal = SDL_GameControllerGetAxis(sdlIC.controllers[i], SDL_CONTROLLER_AXIS_LEFTY);
 
-                if(newCIState->avgX != 0 || newCIState != 0) {
+                newCIState->avgX = normalizeStickInput(xVal, LEFT_THUMB_DEADZONE);
+                newCIState->avgY = normalizeStickInput(yVal, LEFT_THUMB_DEADZONE);
+
+                if(newCIState->avgX != 0 || newCIState->avgY != 0) {
                     newCIState->isAnalog = true;
                 }
 
-                processControllerButtonInput(&newCIState->actionDown, &oldCIState->actionDown, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_A);
-                processControllerButtonInput(&newCIState->actionUp, &oldCIState->actionUp, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_Y);
-                processControllerButtonInput(&newCIState->actionLeft, &oldCIState->actionLeft, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_X);
-                processControllerButtonInput(&newCIState->actionRight, &oldCIState->actionRight, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_B);
+                processControllerButtonInput(&newCIState->actionDown, &oldCIState->actionDown, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_A);
+                processControllerButtonInput(&newCIState->actionUp, &oldCIState->actionUp, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_Y);
+                processControllerButtonInput(&newCIState->actionLeft, &oldCIState->actionLeft, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_X);
+                processControllerButtonInput(&newCIState->actionRight, &oldCIState->actionRight, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_B);
 
-                processControllerButtonInput(&newCIState->directionDown, &oldCIState->directionDown, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_DOWN);
-                processControllerButtonInput(&newCIState->directionUp, &oldCIState->directionUp, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_UP);
-                processControllerButtonInput(&newCIState->directionLeft, &oldCIState->directionLeft, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_LEFT);
-                processControllerButtonInput(&newCIState->directionRight, &oldCIState->directionRight, &newCIState->isAnalog, ic.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+                processControllerButtonInput(&newCIState->directionDown, &oldCIState->directionDown, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+                processControllerButtonInput(&newCIState->directionUp, &oldCIState->directionUp, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_UP);
+                processControllerButtonInput(&newCIState->directionLeft, &oldCIState->directionLeft, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+                processControllerButtonInput(&newCIState->directionRight, &oldCIState->directionRight, &newCIState->isAnalog, sdlIC.controllers[i], SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+
+                oldCIState->isAnalog = newCIState->isAnalog;
 
 
             }
@@ -354,22 +426,22 @@ int main(void) {
 
         //calculate audio buffers' indicies and sizes
         SDL_LockAudioDevice(1);
-        uint32_t startIndex = srb.runningIndex % arraySize(srb.samples);
-        uint32_t endIndex = (srb.sampleToPlay + SOUND_LATENCY) % arraySize(srb.samples);
-        uint32_t samplesToGetFromGame = (startIndex <= endIndex) ? endIndex - startIndex : (arraySize(srb.samples) - startIndex) + endIndex; 
+        uint32_t startIndex = srb.runningIndex % ARRAY_SIZE(srb.samples);
+        uint32_t endIndex = (srb.sampleToPlay + SOUND_LATENCY) % ARRAY_SIZE(srb.samples);
+        uint32_t samplesToGetFromGame = (startIndex <= endIndex) ? endIndex - startIndex : (ARRAY_SIZE(srb.samples) - startIndex) + endIndex; 
         sb.numSamples = samplesToGetFromGame;
         SDL_UnlockAudioDevice(1);
 
 
 
-        gameUpdateAndRender(&gOsb, &sb, newCIState);
+        gameUpdateAndRender(&memory, &gOsb, &sb, newInputState);
 
         updateSDLSoundBuffer(&srb, &sb, startIndex, endIndex);
         updateWindow(window, gTexture);
 
-        ControllerInput* temp = newCIState;
-        newCIState = oldCIState;
-        oldCIState = temp;
+        InputContext* temp = newInputState;
+        newInputState = oldInputState;
+        oldInputState = temp;
      
         //benchmark stuff
         /*
@@ -390,4 +462,53 @@ int main(void) {
 
     cleanUp();
     return 0;
+}
+
+
+FileContents debugFileRead(const char* fileName) {
+    FileContents contents;
+    struct stat fileStats;
+
+    stat(fileName, &fileStats);
+    contents.contents = malloc(fileStats.st_size);
+
+    contents.contentsSize = fileStats.st_size;
+
+    FILE* f;
+
+    if((f = fopen(fileName, "rb"))) {
+        if(fread(contents.contents, contents.contentsSize, 1, f) < 1) {
+            //TODO logging
+        }
+
+        fclose(f);
+    }
+    else {
+        //TODO logging
+    }
+
+
+
+    return contents;
+}
+
+
+void debugFileWrite(const char* fileName, void* dataToWrite, uint64_t numBytesToWrite) {
+    FILE* f;
+
+    if((f = fopen(fileName, "wb"))) {
+        if(fwrite(dataToWrite, numBytesToWrite, 1, f) < 1) {
+            //TODO logging
+        }
+
+        fclose(f);
+    }
+    else {
+        //TODO logging
+    }
+
+}
+void debugFreeFileContents(FileContents* contents) {
+    free(contents->contents);
+    memset(contents, 0, sizeof(*contents));
 }

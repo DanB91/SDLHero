@@ -1,3 +1,5 @@
+#pragma once
+
 #include <stdint.h>
 #include <stdio.h>
 
@@ -8,13 +10,33 @@
 #define NUM_CHANNELS 2
 #define SOUND_LATENCY (SOUND_FREQ / 15)
 
-#define MAX_CONTROLLERS 4
+#define LEFT_THUMB_DEADZONE  7849
+#define RIGHT_THUMB_DEADZONE 8689
+
+#define MAX_CONTROLLERS 5
 
 #define pi32 3.14159265358979f
 
-#define NUM_BUTTONS 6
+#define NUM_BUTTONS 12
 
-#define arraySize(array) (sizeof(array) / sizeof((array)[0]))
+//utility macros/inline functions
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+
+inline uint64_t KB(uint64_t num) {
+    return num*1024ll;
+}
+
+inline uint64_t MB(uint64_t num) {
+    return num*KB(num);
+}
+
+inline uint64_t GB(uint64_t num) {
+    return num*MB(num);
+}
+
+inline uint64_t TB(uint64_t num) {
+    return num*GB(num);
+}
 
 typedef float real32_t;
 typedef double real64_t;
@@ -56,6 +78,21 @@ struct ButtonState {
     bool isEndedDown = false;
 };
 
+struct GameMemory {
+    void* permanentStorage = nullptr;
+    uint64_t permanentStorageSize = 0;
+    void* transientStorage = nullptr;
+    uint64_t transientStorageSize = 0;
+
+};
+
+struct GameState {
+    bool isInited = false;
+    int blueOffset = 0;
+    int greenOffset = 0;
+    uint32_t tone = 0;
+};
+
 struct ControllerInput {
     bool isAnalog = false;
 
@@ -76,6 +113,12 @@ struct ControllerInput {
             ButtonState actionLeft; //X
             ButtonState actionRight; //B
 
+            ButtonState leftShoulder;
+            ButtonState rightShoulder;
+
+            ButtonState start;
+            ButtonState back;
+
         };
     };
 
@@ -86,4 +129,24 @@ struct ControllerInput {
     }
 
 };
-void gameUpdateAndRender(OffScreenBuffer *buffer, GameSoundOutput* sb, const ControllerInput* ci);
+
+
+struct FileContents {
+    void* contents = nullptr;
+    uint64_t contentsSize = 0;
+};
+
+
+struct InputContext {
+    ControllerInput controllers[MAX_CONTROLLERS];
+};
+
+void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buffer, GameSoundOutput* sb, const InputContext* ci);
+
+
+#ifdef HANDMADE_INTERNAL
+FileContents debugFileRead(const char* fileName);
+void debugFileWrite(const char* fileName, void* dataToWrite, uint64_t numBytesToWrite);
+void debugFreeFileContents(FileContents* contents);
+#endif
+

@@ -1,5 +1,5 @@
 CC:=clang++
-CFLAGS:=-std=c++11 -g -Wall $(shell sdl2-config --cflags)
+CFLAGS:=-std=c++11 -g -Wall $(shell sdl2-config --cflags) -DHANDMADE_INTERNAL=1
 LIB:=-std=c++11 $(shell sdl2-config --libs)
 DEPS:=$(wildcard src/*.hpp)
 SRC:=$(wildcard src/*.cpp)

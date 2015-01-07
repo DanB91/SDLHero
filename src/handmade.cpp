@@ -40,15 +40,42 @@ static void outputSound(GameSoundOutput* sb, uint32_t tone) {
 
 }
 
-void gameUpdateAndRender(OffScreenBuffer *buf, GameSoundOutput* sb, const ControllerInput* ci) {
-    static int blueOffset = 0;
-    static int greenOffset = 0;
-    static uint32_t tone = 0;
-    
-    tone = 512 + (int)(256.0f*ci->avgY);
-    blueOffset += ci->avgX * 4;
-    greenOffset += ci->avgY * 4 ;
+void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buf, GameSoundOutput* sb, const InputContext* inputContext) {
+    GameState* state = (GameState*)memory->permanentStorage;
 
-    outputSound(sb, tone);
-    renderWeirdGradient(buf, blueOffset, greenOffset);
+    if(!state->isInited) {
+        state->tone = 512;
+        state->isInited = true;
+    }
+
+    for(uint32_t i = 0; i < ARRAY_SIZE(inputContext->controllers); i++) {
+        const ControllerInput* ci = &inputContext->controllers[i]; 
+
+        if(ci->isAnalog) {
+            state->tone = 512 + (int)(256.0f*ci->avgY);
+            state->blueOffset += ci->avgX * 4;
+            state->greenOffset += ci->avgY * 4 ;
+        }
+        else {
+            if(ci->directionLeft.isEndedDown) {
+                state->blueOffset -= 1;
+            }
+            else if(ci->directionRight.isEndedDown) {
+                state->blueOffset += 1;
+            }
+
+            if(ci->directionUp.isEndedDown) {
+                state->greenOffset -= 1;
+            }
+            else if(ci->directionDown.isEndedDown) {
+                state->greenOffset += 1;
+            }
+        }
+
+
+    }
+
+
+    outputSound(sb, state->tone);
+    renderWeirdGradient(buf, state->blueOffset, state->greenOffset);
 }

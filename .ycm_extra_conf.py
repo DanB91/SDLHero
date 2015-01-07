@@ -84,6 +84,8 @@ flags = [
 '-isystem',
 '/usr/include',
 '-isystem',
+'/usr/local/include/SDL2',
+'-isystem',
 '/usr/local/include',
 '-isystem',
 '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/../lib/c++/v1',
@@ -96,7 +98,11 @@ flags = [
  '-isystem',
  '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.10.sdk/usr/include',
  '-isystem',
- '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.10.sdk/System/Library/Framework']
+ '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.10.sdk/System/Library/Framework',
+ '-D',
+ 'HANDMADE_INTERNAL=1'
+ ]
+ 
 
 
 # Set this to the absolute path to the folder (NOT the file!) containing the
