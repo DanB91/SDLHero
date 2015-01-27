@@ -12,6 +12,7 @@
 #endif
 
 #define MAX_SDL_CONTROLLERS 4
+#define DEFAULT_REFRESH_RATE 60
 
 
 //TODO: get rid of this struct
@@ -25,8 +26,9 @@ struct Texture {
 
 struct SDLInputContext {
     SDL_GameController* controllers[MAX_SDL_CONTROLLERS] = {};
-    
 };
+
+typedef void GameUpdateAndRenderFunc(GameMemory* memory, OffScreenBuffer *buffer, GameSoundOutput* sb, const InputContext* ci, real32_t secsSinceLastFrame);
 
 struct SDLSoundRingBuffer {
     uint32_t sampleToPlay = 0;
@@ -34,3 +36,21 @@ struct SDLSoundRingBuffer {
     Sample samples[SOUND_FREQ];
 };
 
+
+#define GAME_LIB_PATH "./game.so" 
+
+struct GameCode {
+    time_t dateLastModified = 0;  //time the library file was last modified
+    void* libraryHandle = nullptr;
+    GameUpdateAndRenderFunc* guarf = nullptr;
+};
+#define GAME_INPUT_PATH "game_input.bin"
+#define GAME_STATE_PATH "game_state.bin"
+
+struct PlatformState {
+    bool isRecording = false;
+    bool isPlayingBack = false;
+    FILE* inputRecordFile = nullptr;
+    uint64_t gameMemorySize = 0;
+    void* memoryBlock;
+};

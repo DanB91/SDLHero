@@ -27,15 +27,15 @@ inline uint64_t KB(uint64_t num) {
 }
 
 inline uint64_t MB(uint64_t num) {
-    return num*KB(num);
+    return KB(num)*1024ll;
 }
 
 inline uint64_t GB(uint64_t num) {
-    return num*MB(num);
+    return MB(num)*1024ll;
 }
 
 inline uint64_t TB(uint64_t num) {
-    return num*GB(num);
+    return GB(num)*1024ll;
 }
 
 typedef float real32_t;
@@ -141,12 +141,14 @@ struct InputContext {
     ControllerInput controllers[MAX_CONTROLLERS];
 };
 
-void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buffer, GameSoundOutput* sb, const InputContext* ci);
+#ifdef NDEBUG
+void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buffer, GameSoundOutput* sb, const InputContext* ci, real32_t secsSinceLastFrame);
+#endif
 
-
-#ifdef HANDMADE_INTERNAL
+#ifndef NDEBUG
 FileContents debugFileRead(const char* fileName);
 void debugFileWrite(const char* fileName, void* dataToWrite, uint64_t numBytesToWrite);
 void debugFreeFileContents(FileContents* contents);
+
 #endif
 

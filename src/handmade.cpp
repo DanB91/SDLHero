@@ -31,16 +31,22 @@ static void outputSound(GameSoundOutput* sb, uint32_t tone) {
         sb->t += 2 * pi32 / period;
         real32_t sineVal = sinf(sb->t);
 
+#if 0 
         int16_t sample = sineVal * sb->volume;
-
+#else
+        int16_t sample = 0;
+#endif
         sb->samples[i].leftChannel = sample;  //left channel 
         sb->samples[i].rightChannel = sample; //right channel
 
     }
-
+    
 }
 
-void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buf, GameSoundOutput* sb, const InputContext* inputContext) {
+#ifndef NDEBUG 
+extern "C"
+#endif
+void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buf, GameSoundOutput* sb, const InputContext* inputContext, real32_t secsSinceLastFrame) {
     GameState* state = (GameState*)memory->permanentStorage;
 
     if(!state->isInited) {
@@ -53,22 +59,23 @@ void gameUpdateAndRender(GameMemory* memory, OffScreenBuffer *buf, GameSoundOutp
 
         if(ci->isAnalog) {
             state->tone = 512 + (int)(256.0f*ci->avgY);
-            state->blueOffset += ci->avgX * 4;
-            state->greenOffset += ci->avgY * 4 ;
+            state->blueOffset += ci->avgX * 4 * secsSinceLastFrame;
+            state->greenOffset += ci->avgY * 4 * secsSinceLastFrame ;
         }
         else {
+            real32_t velocity = 500 * secsSinceLastFrame; 
             if(ci->directionLeft.isEndedDown) {
-                state->blueOffset -= 1;
+                state->blueOffset -= velocity;
             }
             else if(ci->directionRight.isEndedDown) {
-                state->blueOffset += 1;
+                state->blueOffset += velocity;
             }
 
             if(ci->directionUp.isEndedDown) {
-                state->greenOffset -= 1;
+                state->greenOffset -= velocity;
             }
             else if(ci->directionDown.isEndedDown) {
-                state->greenOffset += 1;
+                state->greenOffset += velocity;
             }
         }
 
