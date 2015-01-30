@@ -48,6 +48,7 @@ struct GameCode {
 #define GAME_STATE_PATH "game_state.bin"
 
 struct PlatformState {
+    bool running = true;
     bool isRecording = false;
     bool isPlayingBack = false;
     FILE* inputRecordFile = nullptr;

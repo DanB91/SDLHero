@@ -12,7 +12,6 @@
 #include "sdl_main.hpp"
 
 
-static bool running = true;
 
 static Texture gTexture;
 static OffScreenBuffer gOsb;
@@ -241,8 +240,9 @@ static void initSDL(SDL_Window** window, SDL_Renderer** renderer, OffScreenBuffe
 
 }
 
-static void cleanUp(GameCode* gameCode) {
+static void cleanUp(PlatformState* state, GameCode* gameCode) {
     closeGameCode(gameCode);
+    munmap(state->memoryBlock, state->gameMemorySize);
     SDL_CloseAudio();
     SDL_Quit();
 }
@@ -388,7 +388,7 @@ static void processEvent(SDL_Event* e, InputContext* inputState, PlatformState* 
     ControllerInput* keyboardController = getContoller(inputState, 0);
     switch (e->type) {
         case SDL_QUIT:
-            running = false;
+            state->running = false;
             break;
         case SDL_WINDOWEVENT:
             processWindowEvent(&e->window);
@@ -539,7 +539,7 @@ int main(void) {
     real32_t targetFrameSeconds = 1./getRefreshRate(window);
 
     SDL_PauseAudio(0);
-    while(running) {
+    while(state.running) {
 
         if(getCreateTimeOfFile(GAME_LIB_PATH) != gameCode.dateLastModified) {
             reloadGameCode(&gameCode);
@@ -662,7 +662,7 @@ int main(void) {
         secsSinceLastFrame = secsElapsed;
     }
 
-    cleanUp(&gameCode);
+    cleanUp(&state, &gameCode);
     return 0;
 }
 
